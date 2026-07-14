@@ -21,6 +21,11 @@ GitHub Actions workflow automatically analyzes each release — both **pre-relea
 and **latest** releases — for risk and compatibility across all supported Azure
 Windows VM OS versions.
 
+This pipeline is **fully agent-driven**. There are no bespoke analysis programs
+checked into the repository — an LLM agent ([Claude Code](https://docs.anthropic.com/en/docs/claude-code))
+loads a reusable **skill**, connects to an off-the-shelf **MCP server**, and
+writes and runs whatever evidence-collection scripts it needs on each run.
+
 ## What it does
 
 1. **Trigger** — fires on the `release` event (`published`, `released`,
@@ -28,54 +33,61 @@ Windows VM OS versions.
    `tag` input to back-fill historical releases.
 2. **Acquire artifacts** — downloads the release zip package and the previous
    release's zip (deterministically selected as the diff baseline) and unpacks
-   both.
-3. **Collect deterministic evidence** ([`scripts/collect_evidence.py`](scripts/collect_evidence.py))
-   for every `.dll` / `.exe` / `.sys` and native/Rust binary:
-   * Authenticode / signing certificate details (subject, issuer, thumbprint,
-     serial, validity, timestamp, digest algorithm) via
-     `Get-AuthenticodeSignature` on Windows or `osslsigncode` on Linux.
-   * PE / .NET metadata (target framework, arch, subsystem, minimum OS version
-     fields, imported DLLs, managed-vs-native).
-   * OS-compatibility signals (imports unavailable on the oldest supported OS).
-   * Binary diff vs. the previous release (added/removed/changed files, size and
-     version deltas, hash changes, **certificate changes**).
-   * Parsed change list.
-   The result is a single machine-readable `evidence.json`.
-4. **LLM analysis** ([`scripts/analyze_release.py`](scripts/analyze_release.py)) —
-   sends the evidence to the LLM (**Claude Opus 4.8**) with a fixed context
-   prompt (runs on all Azure Windows VM OS versions, targets **.NET Framework
-   4.0**, contains **Rust** components, all binaries **Microsoft-signed**,
-   certificate changes in scope). The model returns a structured result that is
-   validated against [`schema/analysis.schema.json`](schema/analysis.schema.json).
-   Findings are grouped by category (*Change list*, *OS compatibility*,
-   *Signing/certificate change*, *.NET Framework 4.0*, *Rust components*,
-   *Binary/dependency changes*, *Other*) with a severity of `Critical` / `High`
-   / `Medium` / `Low` / `Info`, plus an overall risk rating and summary.
-5. **Persist & dashboard** ([`scripts/build_dashboard.py`](scripts/build_dashboard.py)) —
-   writes `analysis/<tag>.json` and `analysis/<tag>.md`, attaches them to the
-   release, and regenerates the aggregate
-   [`docs/risk-dashboard.md`](docs/risk-dashboard.md) with a per-release summary
-   table (severity counts, cert/​.NET/​Rust/​OS flags) and drill-down sections.
+   both. This is the only work the workflow does itself.
+3. **Agentic analysis** — runs the Claude Code CLI headless. The agent:
+   * Loads the [`release-risk-analysis` skill](.claude/skills/release-risk-analysis/SKILL.md),
+     which carries all the domain knowledge (fixed project constraints, the
+     detection technologies to apply, the workflow, and the output contract).
+   * Gets structured file access to the workspace via an off-the-shelf
+     filesystem MCP server configured in [`.mcp.json`](.mcp.json).
+   * **Generates and runs its own scripts on each run** (PowerShell preferred on
+     the Windows runner) to collect deterministic evidence for every
+     `.dll` / `.exe` / `.sys` and native/Rust binary: Authenticode / signing
+     certificate details (via `Get-AuthenticodeSignature`), PE / .NET metadata
+     (target framework, arch, imports, managed-vs-native), OS-compatibility
+     signals, Rust fingerprints, the Rust compiler / OS supportability check
+     (`rustc` version vs. the agent's OS matrix), the change list, and the diff
+     vs. the previous release (including **certificate changes**). Throwaway
+     helpers are deleted before the run finishes.
+   * Writes `analysis/<tag>.json` (validated against
+     [`schema/analysis.schema.json`](schema/analysis.schema.json)) and
+     `analysis/<tag>.md`, and regenerates the aggregate
+     [`docs/risk-dashboard.md`](docs/risk-dashboard.md). Findings are grouped by
+     category (*Change list*, *OS compatibility*, *Signing/certificate change*,
+     *.NET Framework 4.0*, *Rust components*, *Rust supportability*,
+     *Binary/dependency changes*, *Other*) with a severity of `Critical` /
+     `High` / `Medium` / `Low` / `Info`, plus an overall risk rating and summary.
+4. **Persist** — attaches the report to the release and commits the results and
+   the refreshed dashboard back to the repository.
 
 ## Required configuration
 
-* **`ANTHROPIC_API_KEY`** — repository/organization Actions secret used to call
-  Claude Opus 4.8. Store it under *Settings → Secrets and variables → Actions*.
-  It is never inlined in the workflow or scripts. When the secret is absent the
-  analysis step falls back to a deterministic, evidence-only result so the
-  dashboard still updates.
+* **`ANTHROPIC_API_KEY`** — repository/organization Actions secret used by the
+  Claude Code agent. Store it under *Settings → Secrets and variables → Actions*.
+  It is never inlined in the workflow. When the secret is absent the analysis
+  step is skipped and a minimal placeholder report is written so the pipeline
+  still succeeds.
 * The workflow uses the built-in `GITHUB_TOKEN` (with `contents: write`) to
   download assets and commit results — no extra token is required.
 
 ## Running locally
 
+Install the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+and let the agent do everything — no project-specific dependencies to install:
+
 ```bash
-pip install -r scripts/requirements.txt
-python scripts/collect_evidence.py --current <unpacked-release-dir> \
-    --previous <unpacked-previous-dir> --tag <tag> --output evidence.json
-ANTHROPIC_API_KEY=... python scripts/analyze_release.py \
-    --evidence evidence.json --schema schema/analysis.schema.json \
-    --output analysis/<tag>.json           # add --allow-fallback to skip the LLM
-python scripts/build_dashboard.py --release-json analysis/<tag>.json
+npm install -g @anthropic-ai/claude-code
+
+# Unpack the current (and, optionally, previous) release into work/current and
+# work/previous, then point the agent at the skill via the EVIDENCE_* env vars:
+export ANTHROPIC_API_KEY=...
+export EVIDENCE_CURRENT_DIR=work/current EVIDENCE_PREVIOUS_DIR=work/previous
+export EVIDENCE_TAG=<tag> EVIDENCE_PREVIOUS_TAG=<prev-tag> EVIDENCE_PRERELEASE=false
+export EVIDENCE_BODY_FILE=release-body.md EVIDENCE_MODEL=claude-opus-4-8
+export EVIDENCE_OUTPUT_JSON=analysis/<tag>.json EVIDENCE_OUTPUT_MD=analysis/<tag>.md
+export EVIDENCE_DASHBOARD=docs/risk-dashboard.md
+
+claude --print --mcp-config .mcp.json --permission-mode bypassPermissions \
+  "Analyze this release using the release-risk-analysis skill; inputs are in the EVIDENCE_* env vars."
 ```
 
