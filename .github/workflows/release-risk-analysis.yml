@@ -1,11 +1,14 @@
 name: Release Risk & Compatibility Analysis
 
 # Runs when a release is published (pre-release or latest) and analyzes the
-# release's signed zip package: it collects deterministic evidence about every
+# release's signed zip package. The pipeline only downloads the latest package
+# and the one before it; an LLM-based agent (Claude Opus 4.8) then drives an MCP
+# server of evidence-collection & analysis tools plus a reusable skill to
+# enumerate the available detection technologies, gather evidence about every
 # binary (signing certificate, PE/.NET metadata, Rust/native binaries, OS
-# imports, diff vs. the previous release), asks the LLM (Claude Opus 4.8) to
-# produce a structured, schema-validated risk assessment, persists the result
-# under analysis/, and regenerates the aggregate dashboard under docs/.
+# imports, Rust compiler / OS supportability, diff vs. the previous release),
+# produce a structured, schema-validated risk assessment, persist the result
+# under analysis/, and regenerate the aggregate dashboard under docs/.
 
 on:
   release:
@@ -40,6 +43,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Provides `rustc -vV` (release, host triple, LLVM) so the Rust
+      # supportability check can cross-reference the compiler against OS info.
+      - name: Set up Rust toolchain (for rustc/OS supportability info)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install script dependencies
         shell: bash
         run: python -m pip install --upgrade pip && pip install -r scripts/requirements.txt
@@ -63,7 +71,7 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
 
-          # Save the release body (change list) to a file for the collector.
+          # Save the release body (change list) to a file for the tools.
           jq -r '.body // ""' release.json > release-body.md
 
           # Deterministically pick the previous release (by published date) as baseline.
@@ -74,6 +82,8 @@ jobs:
           echo "previous_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
           echo "Analyzing $TAG (prerelease=$PRERELEASE), baseline=${PREV_TAG:-none}"
 
+      # The pipeline only downloads the two packages (latest + the one before);
+      # all evidence gathering is delegated to the agent via the MCP server.
       - name: Download current release zip assets
         shell: bash
         env:
@@ -120,34 +130,33 @@ jobs:
             done
           fi
 
-      - name: Collect static evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          PREV_ARG=""
-          if [ -d work/previous ]; then PREV_ARG="--previous work/previous"; fi
-          python scripts/collect_evidence.py \
-            --current work/current $PREV_ARG \
-            --tag "${{ steps.meta.outputs.tag }}" \
-            --previous-tag "${{ steps.meta.outputs.previous_tag }}" \
-            --release-name "${{ steps.meta.outputs.name }}" \
-            --prerelease "${{ steps.meta.outputs.prerelease }}" \
-            --published-at "${{ steps.meta.outputs.published }}" \
-            --body "@release-body.md" \
-            --release-notes-dir release-notes \
-            --output evidence.json
-
-      - name: Run LLM risk analysis (Claude Opus 4.8)
+      # The agent (Claude Opus 4.8) loads the skill, connects to the evidence MCP
+      # server, enumerates the available detection technologies, inspects both
+      # packages (incl. the Rust compiler / OS supportability check) and emits the
+      # schema-validated report. Falls back to deterministic evidence-only output
+      # when no ANTHROPIC_API_KEY is available.
+      - name: Run agentic risk analysis (Claude Opus 4.8 + MCP + skill)
         shell: bash
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVIDENCE_CURRENT_DIR: work/current
+          EVIDENCE_PREVIOUS_DIR: ${{ steps.meta.outputs.previous_tag != '' && 'work/previous' || '' }}
+          EVIDENCE_TAG: ${{ steps.meta.outputs.tag }}
+          EVIDENCE_PREVIOUS_TAG: ${{ steps.meta.outputs.previous_tag }}
+          EVIDENCE_RELEASE_NAME: ${{ steps.meta.outputs.name }}
+          EVIDENCE_PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          EVIDENCE_PUBLISHED_AT: ${{ steps.meta.outputs.published }}
+          EVIDENCE_BODY_FILE: release-body.md
+          EVIDENCE_RELEASE_NOTES_DIR: release-notes
         run: |
           set -euo pipefail
-          python scripts/analyze_release.py \
-            --evidence evidence.json \
+          python scripts/agent_runner.py \
             --schema schema/analysis.schema.json \
+            --skill skills/release-risk-analysis/SKILL.md \
+            --mcp-server mcp_server/evidence_mcp_server.py \
             --model claude-opus-4-8 \
             --output "analysis/${{ steps.meta.outputs.tag }}.json" \
+            --evidence-out evidence.json \
             --allow-fallback
 
       - name: Render release report and rebuild dashboard

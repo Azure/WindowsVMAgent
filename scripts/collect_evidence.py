@@ -38,6 +38,13 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+try:
+    # Reused so evidence collection and the MCP server share one implementation.
+    from rust_support import check_rust_support, detect_rust_binary
+except ImportError:  # pragma: no cover - allows running from other CWDs
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from rust_support import check_rust_support, detect_rust_binary
+
 BINARY_EXTENSIONS = {".dll", ".exe", ".sys"}
 
 # DLLs that are not present (or only partially present) on the oldest supported
@@ -299,6 +306,7 @@ def collect_binary(root: str, rel: str) -> Dict[str, Any]:
     full = os.path.join(root, rel)
     pe = parse_pe(full)
     risky = sorted(set(pe.get("importedDlls", [])) & OS_RISKY_IMPORTS)
+    rust = detect_rust_binary(full)
     entry: Dict[str, Any] = {
         "path": rel.replace(os.sep, "/"),
         "size": os.path.getsize(full),
@@ -307,6 +315,11 @@ def collect_binary(root: str, rel: str) -> Dict[str, Any]:
         "riskyImports": risky,
         "signature": get_signature(full),
         "version": extract_version_strings(full),
+        "rust": {
+            "isRust": rust["isRust"],
+            "rustcVersion": rust["rustcVersion"],
+            "markers": rust["markers"],
+        },
     }
     return entry
 
@@ -428,6 +441,7 @@ def main() -> int:
             "microsoftSigned": True,
         },
         "changeList": parse_changelist(body, args.release_notes_dir),
+        "rustSupport": check_rust_support(args.current),
         "binaries": {
             "current": current_bins,
             "previous": previous_bins,

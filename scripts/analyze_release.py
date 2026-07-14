@@ -37,10 +37,49 @@ CATEGORIES = [
     "Signing/certificate change",
     ".NET Framework 4.0",
     "Rust components",
+    "Rust supportability",
     "Binary/dependency changes",
     "Other",
 ]
 SEVERITIES = ["Critical", "High", "Medium", "Low", "Info"]
+
+# Detection / analysis technologies the pipeline (and the agent, via the MCP
+# server) can enumerate and apply to this release. Surfaced in the report so the
+# assessment is transparent about which techniques were available/used.
+DETECTION_TECHNOLOGIES = [
+    {
+        "name": "Authenticode signature inspection",
+        "purpose": "Verify every shipped binary carries a valid Microsoft signature and "
+                   "detect certificate rotation vs. the previous release.",
+    },
+    {
+        "name": "PE / COFF header parsing",
+        "purpose": "Recover architecture, subsystem and minimum OS version fields to reason "
+                   "about OS compatibility.",
+    },
+    {
+        "name": ".NET metadata / target-framework analysis",
+        "purpose": "Detect drift away from the required .NET Framework 4.0 target.",
+    },
+    {
+        "name": "Imported-DLL OS-compatibility cross-reference",
+        "purpose": "Flag imports unavailable on the oldest supported Azure Windows VM OS.",
+    },
+    {
+        "name": "Rust binary fingerprinting & rustc version detection",
+        "purpose": "Identify Rust-built binaries and the rustc version used to build them.",
+    },
+    {
+        "name": "Rust compiler / OS supportability check",
+        "purpose": "Verify the detected rustc version still supports the agent's oldest OS "
+                   "(rustc >= 1.78 raises the Windows baseline to Windows 10 / Server 2016).",
+    },
+    {
+        "name": "Release-to-release binary diff",
+        "purpose": "Compare added/removed/changed binaries, sizes, versions, hashes and "
+                   "certificates against the previous release.",
+    },
+]
 
 SYSTEM_PROMPT = """\
 You are a release risk & compatibility analyst for the Microsoft Azure Windows \
@@ -50,15 +89,19 @@ not invent facts. The project has these fixed properties:
 * It runs on ALL Azure Windows VM OS versions (Windows Server 2008 SP2+ and \
 Windows 7 SP2+ through the newest Windows Server SKUs), x64.
 * It targets .NET Framework 4.0. Any drift away from 4.0 is a compatibility risk.
-* Part of the code is written in Rust and shipped as native binaries.
+* Part of the code is written in Rust and shipped as native binaries. The Rust \
+compiler version matters: rustc >= 1.78 raises the Windows baseline to Windows \
+10 / Server 2016 and therefore drops support for the agent's oldest OS, so the \
+detected rustc version must be verified against the supported OS matrix.
 * All shipped binaries are signed with a Microsoft certificate. Unsigned \
 binaries, broken signatures, or certificate changes versus the previous release \
 (thumbprint / issuer / serial / algorithm / timestamp authority) are in scope.
 
 Perform a comprehensive risk assessment covering the change list, OS \
 compatibility (including imports unavailable on the oldest supported OS), \
-signing/certificate changes, .NET Framework 4.0 targeting, Rust components, and \
-binary/dependency changes. Assign a severity to each finding.
+signing/certificate changes, .NET Framework 4.0 targeting, Rust components, Rust \
+compiler supportability (rustc version vs. OS), and binary/dependency changes. \
+Assign a severity to each finding.
 
 Respond with a SINGLE JSON object ONLY (no markdown, no prose) that conforms to \
 the provided JSON schema. Every finding must have category, severity, finding, \
@@ -140,13 +183,29 @@ def compute_derived(result: Dict[str, Any], evidence: Dict[str, Any]) -> None:
     rust_changed = bool(diff.get("added") or diff.get("removed"))
     os_concern = any(b.get("riskyImports")
                      for b in (evidence.get("binaries", {}).get("current") or []))
+    rust_support = evidence.get("rustSupport", {}) or {}
+    rust_support_concern = bool(rust_support.get("hasRustSupportabilityRisk"))
     result.setdefault("flags", {
         "certChanged": bool(cert_changes),
         "netFrameworkDrift": bool(net_drift),
         "rustChanged": bool(rust_changed),
         "osCompatibilityConcern": bool(os_concern),
         "unsignedBinaries": bool(unsigned),
+        "rustSupportabilityConcern": rust_support_concern,
     })
+    # Surface the technologies enumerated by the pipeline unless the model already
+    # provided its own (richer) enumeration.
+    result.setdefault("technologiesDetected", [
+        {**t, "available": True, "used": True} for t in DETECTION_TECHNOLOGIES
+    ])
+    if rust_support and "rustSupport" not in result:
+        result["rustSupport"] = {
+            "hasRustSupportabilityRisk": rust_support_concern,
+            "agentMinOs": rust_support.get("agentMinOs"),
+            "rustBinaryCount": rust_support.get("rustBinaryCount", 0),
+            "incompatibleWithAgentMinOs": rust_support.get(
+                "incompatibleWithAgentMinOs", []),
+        }
 
 
 def call_anthropic(model: str, evidence: Dict[str, Any],
@@ -220,6 +279,31 @@ def fallback_result(evidence: Dict[str, Any], model: str) -> Dict[str, Any]:
                 "rationale": f"Signature status: {b['signature'].get('status')}.",
                 "recommendation": "All shipped binaries must carry a valid Microsoft signature.",
                 "evidenceRefs": [b["path"]],
+            })
+    rust_support = evidence.get("rustSupport", {}) or {}
+    for entry in (rust_support.get("rustBinaries") or []):
+        if entry.get("supportsAgentMinOs") is False:
+            findings.append({
+                "category": "Rust supportability",
+                "severity": "High",
+                "finding": f"{entry['path']} built with rustc "
+                           f"{entry.get('rustcVersion') or 'unknown'} drops the agent's oldest OS",
+                "rationale": entry.get("note", "rustc >= 1.78 raises the Windows baseline to "
+                                               "Windows 10 / Server 2016."),
+                "recommendation": "Pin the Rust toolchain to a rustc that still supports "
+                                  f"{rust_support.get('agentMinOs')}, or use the "
+                                  "*-win7-windows-msvc target.",
+                "evidenceRefs": [entry["path"]],
+            })
+        elif entry.get("supportsAgentMinOs") is None:
+            findings.append({
+                "category": "Rust supportability",
+                "severity": "Low",
+                "finding": f"Could not determine rustc version for Rust binary {entry['path']}",
+                "rationale": "No embedded rustc version marker was found, so its Windows "
+                             "baseline could not be verified.",
+                "recommendation": "Confirm the Rust toolchain version used to build this binary.",
+                "evidenceRefs": [entry["path"]],
             })
     if not findings:
         findings.append({

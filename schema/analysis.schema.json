@@ -77,6 +77,7 @@
               "Signing/certificate change",
               ".NET Framework 4.0",
               "Rust components",
+              "Rust supportability",
               "Binary/dependency changes",
               "Other"
             ]
@@ -117,7 +118,38 @@
         "netFrameworkDrift": { "type": "boolean" },
         "rustChanged": { "type": "boolean" },
         "osCompatibilityConcern": { "type": "boolean" },
-        "unsignedBinaries": { "type": "boolean" }
+        "unsignedBinaries": { "type": "boolean" },
+        "rustSupportabilityConcern": { "type": "boolean" }
+      }
+    },
+    "technologiesDetected": {
+      "type": "array",
+      "description": "Detection/analysis technologies the agent enumerated and used (or considered) to assess this release.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "purpose"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "purpose": { "type": "string", "minLength": 1 },
+          "used": { "type": "boolean" },
+          "available": { "type": "boolean" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "rustSupport": {
+      "type": "object",
+      "description": "Rust compiler / OS supportability assessment for the release's Rust binaries.",
+      "additionalProperties": true,
+      "properties": {
+        "hasRustSupportabilityRisk": { "type": "boolean" },
+        "agentMinOs": { "type": "string" },
+        "rustBinaryCount": { "type": "integer", "minimum": 0 },
+        "incompatibleWithAgentMinOs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       }
     },
     "severityCounts": {
