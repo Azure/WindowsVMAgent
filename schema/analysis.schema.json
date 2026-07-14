@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Azure/WindowsVMAgent/schema/analysis.schema.json",
+  "title": "Release Risk & Compatibility Analysis Result",
+  "description": "Structured result produced by the LLM analysis stage for a single release of the Windows VM Agent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "tag",
+    "prerelease",
+    "generatedAt",
+    "model",
+    "overallRisk",
+    "summary",
+    "findings"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Version of this analysis schema.",
+      "const": "1.0"
+    },
+    "tag": {
+      "type": "string",
+      "description": "Release tag the analysis refers to.",
+      "minLength": 1
+    },
+    "releaseName": {
+      "type": ["string", "null"],
+      "description": "Human-readable release name/title."
+    },
+    "prerelease": {
+      "type": "boolean",
+      "description": "True when the release is a pre-release, false when it is a latest/full release."
+    },
+    "publishedAt": {
+      "type": ["string", "null"],
+      "description": "ISO-8601 timestamp of when the release was published."
+    },
+    "generatedAt": {
+      "type": "string",
+      "description": "ISO-8601 timestamp of when this analysis was generated."
+    },
+    "model": {
+      "type": "string",
+      "description": "Identifier of the LLM model that produced the analysis.",
+      "minLength": 1
+    },
+    "previousTag": {
+      "type": ["string", "null"],
+      "description": "Tag of the previous release used as the diff baseline, or null when there is no baseline."
+    },
+    "overallRisk": {
+      "type": "string",
+      "description": "Overall risk rating for the release.",
+      "enum": ["Critical", "High", "Medium", "Low", "Info"]
+    },
+    "summary": {
+      "type": "string",
+      "description": "High-level, human-readable summary of the risk assessment.",
+      "minLength": 1
+    },
+    "findings": {
+      "type": "array",
+      "description": "Individual findings grouped by category.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "severity", "finding", "rationale", "recommendation"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "Change list",
+              "OS compatibility",
+              "Signing/certificate change",
+              ".NET Framework 4.0",
+              "Rust components",
+              "Binary/dependency changes",
+              "Other"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["Critical", "High", "Medium", "Low", "Info"]
+          },
+          "finding": {
+            "type": "string",
+            "description": "Short description of the finding.",
+            "minLength": 1
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Rationale grounded in the collected evidence.",
+            "minLength": 1
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "Recommended action.",
+            "minLength": 1
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Optional references (file names, thumbprints, etc.) into evidence.json.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "flags": {
+      "type": "object",
+      "description": "Quick boolean/summary flags surfaced on the dashboard.",
+      "additionalProperties": false,
+      "properties": {
+        "certChanged": { "type": "boolean" },
+        "netFrameworkDrift": { "type": "boolean" },
+        "rustChanged": { "type": "boolean" },
+        "osCompatibilityConcern": { "type": "boolean" },
+        "unsignedBinaries": { "type": "boolean" }
+      }
+    },
+    "severityCounts": {
+      "type": "object",
+      "description": "Count of findings by severity.",
+      "additionalProperties": false,
+      "properties": {
+        "Critical": { "type": "integer", "minimum": 0 },
+        "High": { "type": "integer", "minimum": 0 },
+        "Medium": { "type": "integer", "minimum": 0 },
+        "Low": { "type": "integer", "minimum": 0 },
+        "Info": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

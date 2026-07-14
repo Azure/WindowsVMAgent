@@ -1,0 +1,6 @@
+# Python dependencies for the release risk-analysis pipeline scripts.
+# jsonschema is used to validate the LLM result against schema/analysis.schema.json.
+jsonschema>=4.0.0
+# anthropic is required only for the live LLM analysis stage (Claude Opus 4.8).
+# The analyze step degrades to an evidence-only fallback when it is absent.
+anthropic>=0.39.0
