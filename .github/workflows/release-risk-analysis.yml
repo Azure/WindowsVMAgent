@@ -1,0 +1,233 @@
+name: Release Risk & Compatibility Analysis
+
+# When a release is published, this pipeline does NOT run the analysis itself.
+# Instead it *delegates the whole job to GitHub's Copilot coding agent*: it opens
+# a tracking issue that describes the release to analyze and assigns it to the
+# Copilot agent (`copilot-swe-agent`). Copilot then spins up its own ephemeral
+# environment (configured by `.github/workflows/copilot-setup-steps.yml`), loads
+# the `release-risk-analysis` skill and the MCP servers declared in `.mcp.json`,
+# runs on the Claude Opus 4.8 model, downloads the current + previous release
+# packages, writes the schema-validated report under `analysis/`, regenerates the
+# dashboard under `docs/`, and opens a pull request. Once that PR is merged, the
+# `Publish report to GitHub Pages` workflow publishes the report to the repo's
+# GitHub Page.
+
+on:
+  # `published` fires for both full releases and pre-releases, so subscribing to
+  # it alone avoids duplicate delegations (which `released`/`prereleased` would
+  # cause). The prerelease flag is read from the release metadata below.
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to analyze (for manual / back-fill runs)."
+        required: true
+        type: string
+
+# Only one delegation per tag at a time; re-publishes of the same tag are coalesced.
+concurrency:
+  group: release-analysis-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read # read release metadata
+  issues: write # open the tracking issue that is handed to the Copilot agent
+
+env:
+  # Model the Copilot coding agent must run as while performing the analysis.
+  # This is recorded in the task and in the analysis output `model` field.
+  COPILOT_MODEL: claude-opus-4.8
+
+jobs:
+  delegate-to-copilot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Fetch this release's metadata (works for both release + dispatch events).
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > release.json
+          PRERELEASE=$(jq -r '.prerelease' release.json)
+          # Strip any CR/LF so the release name is safe as a single-line output.
+          NAME=$(jq -r '.name // .tag_name' release.json | tr -d '\r\n')
+          PUBLISHED=$(jq -r '.published_at // empty' release.json)
+          HTMLURL=$(jq -r '.html_url // empty' release.json)
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          echo "html_url=$HTMLURL" >> "$GITHUB_OUTPUT"
+
+          # Deterministically pick the baseline: the most recent OTHER release that
+          # was published strictly before this one (ISO-8601 timestamps compare
+          # lexicographically). This is correct for manual/back-fill runs on older
+          # tags too, not just the newest release.
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > releases.json
+          PREV_TAG=$(jq -r --arg tag "$TAG" --arg pub "$PUBLISHED" '
+            [ .[]
+              | select(.tag_name != $tag and .published_at != null
+                       and ($pub == "" or .published_at < $pub)) ]
+            | sort_by(.published_at) | reverse | .[0].tag_name // empty' releases.json)
+          echo "previous_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          echo "Delegating analysis of $TAG (prerelease=$PRERELEASE), baseline=${PREV_TAG:-none}"
+
+      # Build the natural-language task the Copilot coding agent will execute.
+      # All the domain knowledge lives in the skill; this just points the agent at
+      # it and pins the model, the inputs, and the required outputs.
+      - name: Compose Copilot task body
+        id: task
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          PREV_TAG: ${{ steps.meta.outputs.previous_tag }}
+          NAME: ${{ steps.meta.outputs.name }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          PUBLISHED: ${{ steps.meta.outputs.published }}
+          RELEASE_URL: ${{ steps.meta.outputs.html_url }}
+          MODEL: ${{ env.COPILOT_MODEL }}
+        run: |
+          set -euo pipefail
+          BODY_FILE="$(mktemp)"
+          PREV_LINE="No previous release exists; skip the diff and treat this as a baseline."
+          if [ -n "${PREV_TAG}" ]; then
+            PREV_LINE="Previous (baseline) release tag: \`${PREV_TAG}\`. Diff the current release against it."
+          fi
+          cat > "$BODY_FILE" <<EOF
+          ## Release risk & compatibility analysis — \`${TAG}\`
+
+          Perform an automated **risk & compatibility analysis** of this Windows VM
+          Agent release and open a pull request with the results.
+
+          ### Model
+          Run this task on the **${MODEL}** model (Claude Opus 4.8). Record
+          \`${MODEL}\` in the analysis output \`model\` field.
+
+          ### Skill & tools to load
+          - Load and follow the **\`release-risk-analysis\`** skill at
+            \`.claude/skills/release-risk-analysis/SKILL.md\` exactly.
+          - Use the **MCP servers** declared in \`.mcp.json\` (filesystem access to
+            the workspace) plus the GitHub tools available to you.
+          - Validate output against \`schema/analysis.schema.json\`.
+
+          ### Release under analysis
+          - Tag: \`${TAG}\`
+          - Name: ${NAME}
+          - Pre-release: ${PRERELEASE}
+          - Published at: ${PUBLISHED}
+          - Release page: ${RELEASE_URL}
+          - ${PREV_LINE}
+
+          ### What to do
+          1. Download the current release's \`.zip\` package assets for \`${TAG}\`
+             (and the previous release's package when a baseline exists) and unpack
+             them into a working directory.
+          2. Enumerate the applicable detection technologies and write/run whatever
+             evidence-collection scripts you need (per the skill), then delete the
+             throwaway helpers before finishing.
+          3. Write the schema-valid report to \`analysis/${TAG}.json\` and the
+             Markdown report to \`analysis/${TAG}.md\`.
+          4. Regenerate the aggregate dashboard at \`docs/risk-dashboard.md\` from
+             all \`analysis/*.json\` files so it can be published to GitHub Pages.
+          5. Open a pull request with these changes. Do not modify anything else.
+          EOF
+          # Expose the body via an output using a random delimiter (multi-line safe).
+          DELIM="EOF_$(openssl rand -hex 8)"
+          {
+            echo "body<<${DELIM}"
+            cat "$BODY_FILE"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Create a tracking issue and assign it to the Copilot coding agent. Assigning
+      # `copilot-swe-agent` is what triggers Copilot to pick up and work the task.
+      - name: Assign analysis task to Copilot coding agent
+        shell: bash
+        env:
+          # A token that can create issues and assign the Copilot agent. The default
+          # GITHUB_TOKEN works when Copilot coding agent is enabled for the repo; set
+          # COPILOT_ASSIGN_TOKEN (a PAT with `repo`/`issues`) to override if needed.
+          GH_TOKEN: ${{ secrets.COPILOT_ASSIGN_TOKEN || github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          TASK_BODY: ${{ steps.task.outputs.body }}
+        run: |
+          set -euo pipefail
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY##*/}"
+          TITLE="Release risk analysis for ${TAG}"
+
+          # 0) Idempotency: if a tracking issue for this tag already exists, do not
+          #    create a duplicate (a tag can be re-published, firing the trigger
+          #    again). Match the exact title in this repo.
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all \
+            --search "in:title \"${TITLE}\"" --json title,url \
+            --jq "[.[] | select(.title==\"${TITLE}\") | .url][0] // empty")
+          if [ -n "$EXISTING" ]; then
+            echo "Tracking issue for ${TAG} already exists: ${EXISTING} — skipping."
+            echo "## Release risk analysis already delegated for \`${TAG}\`: ${EXISTING}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # 1) Resolve the repository node id and the Copilot agent's actor id.
+          #    Copilot is exposed as an assignable "suggested actor" with the
+          #    CAN_BE_ASSIGNED capability. Via GraphQL suggestedActors its login is
+          #    `copilot-swe-agent` (the REST assignees API surfaces the same bot as
+          #    `Copilot`); prefer `copilot-swe-agent`, else fall back to the bot
+          #    whose login is exactly `Copilot`.
+          RESP=$(gh api graphql -f owner="$OWNER" -f name="$REPO" -f query='
+            query($owner:String!, $name:String!) {
+              repository(owner:$owner, name:$name) {
+                id
+                suggestedActors(capabilities:[CAN_BE_ASSIGNED], first:100) {
+                  nodes { login __typename ... on Bot { id } ... on User { id } }
+                }
+              }
+            }')
+          REPO_ID=$(echo "$RESP" | jq -r '.data.repository.id')
+          COPILOT_ID=$(echo "$RESP" | jq -r '
+            ( [ .data.repository.suggestedActors.nodes[] | select(.login=="copilot-swe-agent") ]
+              + [ .data.repository.suggestedActors.nodes[] | select(.login=="Copilot") ] )
+            | .[0].id // empty')
+
+          if [ -z "$COPILOT_ID" ] || [ "$COPILOT_ID" = "null" ]; then
+            echo "::error::Copilot coding agent is not available as an assignee for ${GITHUB_REPOSITORY}. Enable Copilot coding agent for this repository, or provide COPILOT_ASSIGN_TOKEN with access."
+            exit 1
+          fi
+
+          # 2) Create the tracking issue already assigned to Copilot. Assigning the
+          #    Copilot actor at creation time hands the task to the coding agent.
+          CREATE=$(gh api graphql \
+            -f repoId="$REPO_ID" \
+            -f title="$TITLE" \
+            -f body="$TASK_BODY" \
+            -f assignee="$COPILOT_ID" \
+            -f query='
+            mutation($repoId:ID!, $title:String!, $body:String!, $assignee:ID!) {
+              createIssue(input:{repositoryId:$repoId, title:$title, body:$body, assigneeIds:[$assignee]}) {
+                issue { number url }
+              }
+            }')
+          ISSUE_URL=$(echo "$CREATE" | jq -r '.data.createIssue.issue.url')
+          ISSUE_NUM=$(echo "$CREATE" | jq -r '.data.createIssue.issue.number')
+          echo "Assigned release analysis of ${TAG} to the Copilot coding agent: ${ISSUE_URL}"
+
+          {
+            echo "## Release risk analysis delegated to Copilot";
+            echo "";
+            echo "- Release: \`${TAG}\`";
+            echo "- Model: \`${COPILOT_MODEL}\`";
+            echo "- Tracking issue: [#${ISSUE_NUM}](${ISSUE_URL})";
+            echo "";
+            echo "Copilot will load the \`release-risk-analysis\` skill and the MCP servers, run the analysis, and open a pull request with the report. Merging that PR publishes it to GitHub Pages.";
+          } >> "$GITHUB_STEP_SUMMARY"

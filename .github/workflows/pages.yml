@@ -1,0 +1,128 @@
+name: Publish report to GitHub Pages
+
+# Publishes the release risk & compatibility report to the repository's GitHub
+# Page. The Copilot coding agent writes the dashboard under `docs/` and the
+# per-release reports under `analysis/`; when its pull request is merged into the
+# default branch, this workflow renders those Markdown files into a small static
+# HTML site and deploys it to GitHub Pages. It can also be run manually.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "docs/**"
+      - "analysis/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Allow only one concurrent deployment.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install renderer
+        run: python -m pip install --upgrade "markdown>=3.6"
+
+      # Render the dashboard and each per-release report from Markdown to a small
+      # self-contained HTML site. Report filenames are slugified so tags that
+      # contain URL-unsafe characters (e.g. the `&` in `...AMD64&ARM64`) produce
+      # valid links, and the dashboard's `../analysis/<tag>.md` links are rewritten
+      # to point at the generated HTML pages.
+      - name: Render Markdown reports to a static site
+        run: |
+          python - <<'PY'
+          import glob, html, os, re, shutil
+          import markdown
+
+          os.makedirs("_site/analysis", exist_ok=True)
+          md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists"])
+
+          def slug(name):
+              return re.sub(r"[^A-Za-z0-9._-]+", "-", name)
+
+          STYLE = (
+              "body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
+              "max-width:1000px;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1f2328}"
+              "table{border-collapse:collapse;width:100%;margin:1rem 0}"
+              "th,td{border:1px solid #d0d7de;padding:6px 10px;text-align:left}"
+              "th{background:#f6f8fa}code{background:#eff1f3;padding:.1em .3em;border-radius:4px}"
+              "a{color:#0969da;text-decoration:none}a:hover{text-decoration:underline}"
+              "h1,h2{border-bottom:1px solid #d0d7de;padding-bottom:.3em}"
+          )
+
+          def page(title, body):
+              return (
+                  "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+                  "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                  f"<title>{html.escape(title)}</title><style>{STYLE}</style></head>"
+                  f"<body><main>{body}</main></body></html>"
+              )
+
+          reports = sorted(glob.glob("analysis/*.md"))
+          linkmap = {os.path.basename(r): slug(os.path.basename(r)[:-3]) + ".html" for r in reports}
+
+          def rewrite(text, base_prefix):
+              # base_prefix is the path prefix from the current page to the
+              # analysis/ directory: "analysis/" for the root dashboard, "" for a
+              # page that already lives inside analysis/.
+              for base, target in linkmap.items():
+                  for src in ("../analysis/" + base, "analysis/" + base):
+                      text = text.replace(src, base_prefix + target)
+              return text
+
+          dash = "docs/risk-dashboard.md"
+          if os.path.exists(dash):
+              md.reset()
+              body = md.convert(rewrite(open(dash, encoding="utf-8").read(), "analysis/"))
+              open("_site/index.html", "w", encoding="utf-8").write(page("Release Risk Dashboard", body))
+
+          for r in reports:
+              base = os.path.basename(r)
+              md.reset()
+              body = md.convert(rewrite(open(r, encoding="utf-8").read(), ""))
+              open("_site/analysis/" + linkmap[base], "w", encoding="utf-8").write(page(base[:-3], body))
+
+          # Publish the raw JSON reports alongside the HTML (slugified filenames).
+          for j in glob.glob("analysis/*.json"):
+              shutil.copyfile(j, "_site/analysis/" + slug(os.path.basename(j)))
+
+          print("Rendered site:")
+          for f in sorted(glob.glob("_site/**/*", recursive=True)):
+              print(" ", f)
+          PY
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

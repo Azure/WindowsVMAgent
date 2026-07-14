@@ -13,3 +13,7 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# Python bytecode cache (e.g. from helper scripts the analysis agent generates at runtime)
+__pycache__/
+*.py[cod]
