@@ -38,14 +38,15 @@ import os
 import platform
 import re
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # Extensions that may contain Rust-compiled code.
 RUST_CANDIDATE_EXTENSIONS = {".dll", ".exe", ".sys"}
 
 # rustc release at which the default MSVC targets dropped Windows 7 / 8 /
-# Server 2008 R2 / 2012 support and raised the floor to Windows 10 / Server 2016.
-RUSTC_WIN10_BASELINE = (1, 78, 0)
+# Server 2008 R2 / 2012 support and raised the floor to Windows 10 / Server 2016
+# (which share the same baseline).
+RUSTC_WIN10_SERVER2016_BASELINE = (1, 78, 0)
 
 # The oldest OS the Windows VM Agent officially supports.
 AGENT_MIN_WINDOWS = "Windows Server 2008 SP2 / Windows 7 SP2 (x64)"
@@ -62,10 +63,6 @@ _RUST_MARKERS = (
     b"called `Result::unwrap()` on an `Err` value",
     b"called `Option::unwrap()` on a `None` value",
 )
-
-
-def _version_tuple(major: int, minor: int, patch: int) -> Tuple[int, int, int]:
-    return (major, minor, patch)
 
 
 def detect_rust_binary(path: str, max_bytes: int = 32 * 1024 * 1024) -> Dict[str, Any]:
@@ -119,8 +116,8 @@ def windows_baseline_for_rustc(version_tuple: Optional[List[int]]) -> Dict[str, 
             "note": "rustc version could not be determined from the binary; "
                     "the Windows baseline is unknown.",
         }
-    version = _version_tuple(*version_tuple[:3])
-    if version >= RUSTC_WIN10_BASELINE:
+    version = tuple(version_tuple[:3])
+    if version >= RUSTC_WIN10_SERVER2016_BASELINE:
         return {
             "minWindows": "Windows 10 / Windows Server 2016",
             "supportsAgentMinOs": False,
@@ -200,7 +197,7 @@ def check_rust_support(root: str,
 
     return {
         "agentMinOs": AGENT_MIN_WINDOWS,
-        "rustcWin10Baseline": ".".join(map(str, RUSTC_WIN10_BASELINE)),
+        "rustcWin10Baseline": ".".join(map(str, RUSTC_WIN10_SERVER2016_BASELINE)),
         "toolchain": rustc_toolchain_info(),
         "runnerOs": {
             "system": platform.system(),

@@ -229,7 +229,7 @@ def run_agent(model: str, schema: Dict[str, Any], client: MCPStdioClient,
                        if getattr(b, "type", None) == "text")
         return ar._extract_json(text)
 
-    raise RuntimeError(f"Agent did not converge within {max_turns} turns.")
+    raise RuntimeError(f"Agent did not produce a final result within {max_turns} turns.")
 
 
 # ---------------------------------------------------------------------------
