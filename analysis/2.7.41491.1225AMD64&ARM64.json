@@ -4,156 +4,164 @@
   "releaseName": "Windows IaaS VMAgent 2.7.41491.1225 AMD64&ARM64 [Cancelled At Stage 9]",
   "prerelease": false,
   "publishedAt": "2026-05-18T20:11:39Z",
-  "generatedAt": "2026-07-14T21:32:34Z",
+  "generatedAt": "2026-07-14T21:47:50Z",
   "model": "claude-opus-4.8",
   "previousTag": "2.7.41491.1216AMD64&ARM64",
-  "overallRisk": "Low",
-  "summary": "Dry-run analysis of VMAgent 2.7.41491.1225 (baseline 2.7.41491.1216). This release exposes no downloadable .zip package assets on GitHub, so binary-level evidence (Authenticode signatures, PE/.NET target framework, OS-compatibility imports, embedded rustc versions) could not be collected; the assessment is therefore based on the published change list only. The change list is a routine feature/telemetry/build-infra update with no indication of a signing-certificate change, a move away from .NET Framework 4.0, or an OS-matrix change. It does touch Rust code paths (catalog-file install/uninstall), so the Rust compiler / OS supportability check must be re-run against the shipped Rust binaries once package assets are available. Overall risk is Low with several items pending binary verification.",
+  "overallRisk": "High",
+  "summary": "Binary-level analysis of the amd64 and arm64 GuestAgentPackage .zip assets of VMAgent 2.7.41491.1225 (baseline 2.7.41491.1216); the .wim, .msi and _PDBs.zip assets were intentionally excluded per scope. The amd64 package contains 110 PE files (43 managed, 67 native) and the arm64 package 64 PE files (40 managed, 24 native); every binary is validly Microsoft-signed (leaf CN=Microsoft Corporation), SHA-256 file digest, RFC-3161 timestamped. Two findings drive risk. (1) Rust supportability (High): the native Rust modules rust_common.dll and rust_utils.dll are built with Microsoft rustc 1.92.0 and 1.84.1 respectively (both >= 1.78) and import Windows 8+/Server 2012+ only APIs (WaitOnAddress via api-ms-win-core-synch-l1-2-0.dll, GetSystemTimePreciseAsFileTime), so they cannot load on the agent's oldest declared OS, Windows 7 SP2 / Windows Server 2008 SP2. This condition is pre-existing and identical in the 2.7.41491.1216 baseline (same rustc versions and same imports) rather than a regression introduced by this release. (2) Signing-certificate change (Medium): the code-signing chain rotated from issuing CA 'Microsoft Code Signing PCA 2011' (baseline) to 'Microsoft Code Signing PCA 2024' (this release); the leaf subject is unchanged and both chain to Microsoft Root Certificate Authority 2011 - a benign Microsoft PKI rotation, not a compromise. All managed assemblies still target .NET Framework 4.0 (CLR v4.0.30319; the only exception, the third-party srmlib.dll, targets the legacy CLR v2.0 and is unchanged from baseline) - no .NET drift. Diff vs baseline: one new binary, WindowsAzureGuestAgentGateKeeper.exe (matches the 'pre-validation gate keeper' change-list items), nothing removed, and nearly all binaries re-signed/rebuilt (hash change) consistent with the stated build-image 2019->2022 move plus the certificate rotation. Net release-specific delta is low; overall rating is High solely because of the (carried-over) Rust down-level supportability gap.",
   "findings": [
     {
-      "category": "Change list",
-      "severity": "Low",
-      "finding": "Rust code paths changed (catalog-file install/uninstall)",
-      "rationale": "The change list includes PR 14499782 'Rust install and uninstall methods for catalog file feature' and PR 14786098 'catalog support', indicating the shipped Rust components changed in this release relative to 2.7.41491.1216.",
-      "recommendation": "Once the signed package is attached to the release, recover the embedded rustc version for each Rust binary and confirm it is < 1.78 so the Windows Server 2008 SP2 / Windows 7 SP2 baseline is preserved.",
-      "evidenceRefs": [
-        "change-list: PR 14499782",
-        "change-list: PR 14786098"
-      ]
-    },
-    {
       "category": "Rust supportability",
-      "severity": "Low",
-      "finding": "rustc version could not be recovered (no package assets)",
-      "rationale": "The release carries no downloadable .zip assets, so no Rust binary was available to fingerprint for its embedded rustc version. The rustc >= 1.78 -> Windows 10 / Server 2016 supportability rule could not be evaluated against actual binaries in this dry run.",
-      "recommendation": "Attach the signed release package and re-run the analysis to confirm the Rust binaries were built with rustc < 1.78 (or accept the raised baseline if >= 1.78).",
+      "severity": "High",
+      "finding": "Shipped Rust binaries built with rustc >= 1.78 and import Windows 8+ only synchronization APIs",
+      "rationale": "rust_common.dll embeds the Microsoft toolchain path 'rust.tools.stable-llvm-x86_64-pc-windows-msvc.1.92.0-ms-20260416.4' (rustc 1.92.0) and rust_utils.dll embeds 'rust.tools-x86_64-pc-windows-msvc 1.84.1-ms-20250131.1' (rustc 1.84.1); both are >= 1.78, at which point the Rust project made Windows 10 / Server 2016 the minimum supported Windows version. This is confirmed at the binary level: both modules import WaitOnAddress from api-ms-win-core-synch-l1-2-0.dll and rust_common.dll also imports GetSystemTimePreciseAsFileTime - APIs that do not exist on Windows 7 SP2 / Windows Server 2008 SP2, so these modules cannot load there. The identical rustc versions and identical imports are present in the 2.7.41491.1216 baseline, so this is a pre-existing supportability gap, not a regression in 2.7.41491.1225.",
+      "recommendation": "Confirm whether Windows 7 SP2 / Windows Server 2008 SP2 are still officially supported for the Rust-backed code paths (catalog-file feature). If down-level support is required, pin the Rust components to a toolchain < 1.78 or gate the Rust code paths off on those OSes; otherwise update the documented minimum OS to Windows 10 / Server 2016 for functionality that depends on rust_common.dll / rust_utils.dll.",
       "evidenceRefs": [
-        "release assets: 0 .zip files"
+        "cur/amd64_x/rust_common.dll: rustc 1.92.0-ms-20260416.4",
+        "cur/amd64_x/rust_utils.dll: rustc 1.84.1-ms-20250131.1",
+        "cur/amd64_x/rust_common.dll import: WaitOnAddress (api-ms-win-core-synch-l1-2-0.dll), GetSystemTimePreciseAsFileTime",
+        "cur/arm64_x/rust_common.dll: rustc 1.92.0-ms-20260416.4",
+        "baseline base/amd64_x/rust_common.dll: rustc 1.92.0-ms-20260401.3 (same major.minor.patch, same WaitOnAddress import)"
       ]
     },
     {
       "category": "Signing/certificate change",
-      "severity": "Low",
-      "finding": "Authenticode signatures could not be verified (no package assets)",
-      "rationale": "With no .dll/.exe/.sys binaries available to download, Get-AuthenticodeSignature could not be run, so signer subject/issuer/thumbprint/serial and any certificate drift vs. the baseline could not be checked.",
-      "recommendation": "Verify every shipped binary is validly Microsoft-signed and that the signing certificate (thumbprint / issuer / serial / algorithm / timestamp authority) is unchanged vs. 2.7.41491.1216 once assets are present.",
+      "severity": "Medium",
+      "finding": "Code-signing chain rotated from 'Microsoft Code Signing PCA 2011' to 'Microsoft Code Signing PCA 2024'",
+      "rationale": "The leaf signing certificate subject is unchanged (CN=Microsoft Corporation, O=Microsoft Corporation), but its issuing intermediate CA changed from 'Microsoft Code Signing PCA 2011' in the 2.7.41491.1216 baseline (e.g. WindowsAzureGuestAgent.exe leaf thumbprint 3f56a45111684d454e231cfdc4da5c8d370f9816) to 'Microsoft Code Signing PCA 2024' in this release (leaf thumbprint 1d77a9b9e8fe2075d9ad15123257fb90db0da4a1). Both chains still root to 'Microsoft Root Certificate Authority 2011'. Every one of the 110 amd64 / 64 arm64 PE files is validly signed with a SHA-256 file digest and is RFC-3161 timestamped; no unsigned or broken-signature binaries were found. This is a routine Microsoft PKI rotation, not a certificate compromise.",
+      "recommendation": "Confirm the 'Microsoft Code Signing PCA 2024' intermediate is expected and trusted by any pinning/allow-list logic in downstream validators, then treat the change as benign.",
       "evidenceRefs": [
-        "release assets: 0 .zip files"
+        "cur/amd64_x/WindowsAzureGuestAgent.exe leaf issuer: CN=Microsoft Code Signing PCA 2024",
+        "base/amd64_x/WindowsAzureGuestAgent.exe leaf issuer: CN=Microsoft Code Signing PCA 2011",
+        "cur leaf thumbprint 1d77a9b9e8fe2075d9ad15123257fb90db0da4a1 vs base 3f56a45111684d454e231cfdc4da5c8d370f9816",
+        "both chain to CN=Microsoft Root Certificate Authority 2011"
+      ]
+    },
+    {
+      "category": "Binary/dependency changes",
+      "severity": "Low",
+      "finding": "One new binary (WindowsAzureGuestAgentGateKeeper.exe); nearly all binaries rebuilt/re-signed",
+      "rationale": "Release-to-release diff of the amd64 package shows exactly one added binary, WindowsAzureGuestAgentGateKeeper.exe (also added on arm64), which correlates with the change-list items 'pre-validation gate keeper setup' (PR 15070959) and 'gate keeper process executor' (PR 15299842). No binaries were removed. 109/110 amd64 and 63/64 arm64 shared PE files changed SHA-256, consistent with a full rebuild under the new build image (PR 15539952 '2019 to 2022') plus the certificate rotation, rather than targeted code changes. The change list also records shared-component bumps VMAgent-Shared 3.0.03312.64 -> 3.0.3355.67 and HostGAP-SDK 1.0.8.181 -> 1.0.8.184.",
+      "recommendation": "No action; the new gate-keeper executable is expected. Spot-check WindowsAzureGuestAgentGateKeeper.exe is signed and targets .NET Framework 4.0 (verified: signed, .NETFramework v4.0).",
+      "evidenceRefs": [
+        "diff cur/amd64_x vs base/amd64_x: added WindowsAzureGuestAgentGateKeeper.exe; removed none; 109 changed",
+        "change-list: PR 15070959, PR 15299842 (gate keeper)"
       ]
     },
     {
       "category": ".NET Framework 4.0",
       "severity": "Low",
-      "finding": "Target framework could not be verified (no package assets)",
-      "rationale": "No managed assemblies were available to read the TargetFrameworkAttribute / PE metadata, so drift away from .NET Framework 4.0 could not be confirmed or ruled out. Nothing in the change list indicates a target-framework change.",
-      "recommendation": "Confirm all managed assemblies still target .NET Framework 4.0 when package assets are available.",
+      "finding": "All managed assemblies remain on .NET Framework 4.0; no drift to .NET Core / 5+",
+      "rationale": "Of 43 managed assemblies in the amd64 package, 31 carry an explicit TargetFrameworkAttribute of '.NETFramework,Version=v4.0'; the remaining 12 have no TFM attribute but their CLR metadata header is v4.0.30319, so they load on the .NET Framework 4.0 runtime (mostly C++/CLI mixed-mode modules such as MFCM140.dll, TransparentInstaller.dll, VMAgentDisabler.dll). The single exception is the third-party srmlib.dll whose CLR header is v2.0.50727 (legacy .NET 2.0), which is unchanged from the baseline. No assembly targets .NETCoreApp or .NETStandard.",
+      "recommendation": "No action required; continue to confirm no assembly moves off .NET Framework 4.0 in future releases.",
       "evidenceRefs": [
-        "release assets: 0 .zip files"
+        "cur/amd64_x: 31 assemblies .NETFramework v4.0; 12 CLR v4.0.30319 without TFM attr",
+        "cur/amd64_x/srmlib.dll: CLR v2.0.50727 (legacy, third-party, unchanged from baseline)"
       ]
     },
     {
-      "category": "Binary/dependency changes",
-      "severity": "Info",
-      "finding": "Shared component version bumps",
-      "rationale": "The change list records VMAgent-Shared 3.0.03312.64 -> 3.0.3355.67 and HostGAP-SDK 1.0.8.181 -> 1.0.8.184 (ProxyAgent-Shared unchanged). These are routine dependency bumps described as perf/telemetry optimizations and build-image upgrades.",
-      "recommendation": "Diff the shared-component binaries (size / version / hash) against the baseline once package assets are available.",
+      "category": "Rust components",
+      "severity": "Low",
+      "finding": "Rust catalog-feature components present and updated in line with the change list",
+      "rationale": "The package ships native Rust modules rust_common.dll (vendoring proxy_agent_shared 1.0.39, tokio 1.49.0, hyper 1.8.1, serde_json 1.0.142) and rust_utils.dll (zip 0.6.6, zstd 5.0.2, bzip2 0.4.4, flate2 1.1.9), plus a managed wrapper Microsoft.WindowsAzure.GuestAgent.Core.IaaS.RustWrapper.dll. These correlate with the change-list Rust catalog-file items (PR 14499782 'Rust install and uninstall methods for catalog file feature', PR 14786098 'catalog support'). The rust_common.dll toolchain build suffix advanced from 20260401.3 (baseline) to 20260416.4 (this release) but the compiler version is the same 1.92.0.",
+      "recommendation": "Track the vendored crate versions for known advisories in future releases; no action for this release beyond the supportability finding above.",
       "evidenceRefs": [
-        "change-list: VMAgent-Shared 3.0.03312.64->3.0.3355.67",
-        "change-list: HostGAP-SDK 1.0.8.181->1.0.8.184"
+        "cur/amd64_x/rust_common.dll: proxy_agent_shared-1.0.39, tokio-1.49.0, hyper-1.8.1",
+        "cur/amd64_x/rust_utils.dll: zip-0.6.6, zstd-safe-5.0.2, bzip2-0.4.4, flate2-1.1.9"
       ]
     },
     {
       "category": "OS compatibility",
       "severity": "Info",
-      "finding": "Build image moved from 2019 to 2022 (build-time only)",
-      "rationale": "PR 15539952 'change build image from 2019 to 2022' and PR 15615349 'upgrade to 2022 image' change the build toolchain, not the runtime OS matrix. A newer toolchain can theoretically pull in newer imported APIs, but no runtime OS-matrix change is stated in the change list.",
-      "recommendation": "When binaries are available, inspect imported DLLs/APIs to ensure no symbols were introduced that are absent on Windows Server 2008 SP2 / Windows 7 SP2.",
+      "finding": "Non-Rust runtime imports satisfied by in-package redistributables",
+      "rationale": "Aside from the Rust modules covered above, the native binaries import the Universal CRT (ucrtbase.dll), the VC++ 2015-2022 runtime (vcruntime140*.dll, msvcp140*.dll) and the api-ms-win-* API sets, all of which are shipped inside the package, so down-level API resolution does not depend on the host OS for those components. The build toolchain moved from the 2019 to the 2022 image (PR 15539952, PR 15615349), a build-time change that does not by itself alter the runtime OS matrix for the non-Rust binaries.",
+      "recommendation": "No action; continue to ship the CRT/VCRuntime redistributables in-package for down-level support.",
       "evidenceRefs": [
-        "change-list: PR 15539952",
-        "change-list: PR 15615349"
+        "cur/amd64_x contains ucrtbase.dll, vcruntime140.dll, msvcp140.dll and api-ms-win-* api-sets",
+        "change-list: PR 15539952, PR 15615349 (build image 2019->2022)"
       ]
     },
     {
       "category": "Change list",
       "severity": "Info",
-      "finding": "Feature/telemetry/validation changes with no compatibility signal",
-      "rationale": "The bulk of the change list is guest-agent pre-validation, signature-validation telemetry, static-check logic, goal-state performance improvements, binskim fixes and pipeline changes. None of these indicate a certificate change, a .NET target change, or an OS-matrix change.",
-      "recommendation": "No action beyond the standard binary verification once assets are attached.",
+      "finding": "Feature/telemetry/validation changes correlate with observed binaries",
+      "rationale": "The bulk of the change list is guest-agent pre-validation, signature-validation telemetry, static-check logic, goal-state performance and pipeline work. The two observable binary-level effects are the new WindowsAzureGuestAgentGateKeeper.exe and the updated Rust catalog components, both of which match specific change-list PRs. Nothing in the change list indicates a move off .NET Framework 4.0 or a runtime OS-matrix change.",
+      "recommendation": "No action beyond the findings above.",
       "evidenceRefs": [
         "change-list: VMAgent 2.7.41491.1216 -> 2.7.41491.1225"
       ]
     }
   ],
   "flags": {
-    "certChanged": false,
+    "certChanged": true,
     "netFrameworkDrift": false,
     "rustChanged": true,
-    "osCompatibilityConcern": false,
+    "osCompatibilityConcern": true,
     "unsignedBinaries": false,
-    "rustSupportabilityConcern": false
+    "rustSupportabilityConcern": true
   },
   "technologiesDetected": [
     {
-      "name": "Authenticode signing (Get-AuthenticodeSignature)",
+      "name": "Authenticode signing (osslsigncode + PKCS#7 cert parsing)",
       "purpose": "Verify every binary is validly Microsoft-signed and detect certificate drift vs. the baseline.",
-      "used": false,
-      "available": false,
-      "notes": "No .zip package assets on the release, so no binaries to inspect."
+      "used": true,
+      "available": true,
+      "notes": "All 110 amd64 / 64 arm64 PE files signed, SHA-256 digest, timestamped; issuing CA rotated 2011->2024 (leaf subject unchanged)."
     },
     {
       "name": "PE / .NET metadata",
-      "purpose": "Determine architecture, managed-vs-native, and the .NET target framework (drift from 4.0).",
-      "used": false,
-      "available": false,
-      "notes": "No assemblies available to read TargetFrameworkAttribute."
+      "purpose": "Determine architecture, managed-vs-native and the .NET target framework (drift from 4.0).",
+      "used": true,
+      "available": true,
+      "notes": "Read TargetFrameworkAttribute and CLR metadata header; all managed assemblies on CLR v4.0.30319 except legacy srmlib.dll (v2.0)."
     },
     {
       "name": "OS-compatibility imports",
       "purpose": "Detect imported APIs unavailable on Windows Server 2008 SP2 / Windows 7 SP2.",
-      "used": false,
-      "available": false,
-      "notes": "No binaries available to inspect the import table."
+      "used": true,
+      "available": true,
+      "notes": "Rust modules import WaitOnAddress (api-ms-win-core-synch-l1-2-0.dll) and GetSystemTimePreciseAsFileTime - Windows 8+ only."
     },
     {
       "name": "Rust / native binary fingerprinting",
       "purpose": "Identify Rust binaries and recover embedded rustc/cargo markers.",
-      "used": false,
-      "available": false,
-      "notes": "No binaries available; Rust change inferred from the change list only."
+      "used": true,
+      "available": true,
+      "notes": "Identified rust_common.dll and rust_utils.dll plus vendored crate paths via embedded cargo registry strings."
     },
     {
       "name": "Rust compiler / OS supportability",
       "purpose": "Cross-reference embedded rustc version against the OS matrix (rustc >= 1.78 -> Win10 / Server 2016).",
-      "used": false,
-      "available": false,
-      "notes": "rustc version could not be recovered without binaries."
+      "used": true,
+      "available": true,
+      "notes": "rustc 1.92.0 (rust_common.dll) and 1.84.1 (rust_utils.dll), both >= 1.78 -> down-level OS support dropped."
     },
     {
       "name": "Release-to-release diff",
       "purpose": "Compute added/removed/changed binaries and certificate changes vs. the baseline.",
-      "used": false,
-      "available": false,
-      "notes": "Neither the current nor the baseline release exposes package assets."
+      "used": true,
+      "available": true,
+      "notes": "Diffed against 2.7.41491.1216 amd64/arm64 GuestAgentPackage .zip: +1 binary, 0 removed, ~all re-signed/rebuilt."
     },
     {
       "name": "Change-list correlation",
       "purpose": "Correlate stated changes with observed binary changes.",
       "used": true,
       "available": true,
-      "notes": "Primary evidence source for this dry run."
+      "notes": "Gate-keeper executable and Rust catalog components matched to specific change-list PRs."
     }
   ],
   "rustSupport": {
-    "hasRustSupportabilityRisk": false,
+    "hasRustSupportabilityRisk": true,
     "agentMinOs": "Windows Server 2008 SP2 / Windows 7 SP2",
-    "rustBinaryCount": 0,
-    "incompatibleWithAgentMinOs": []
+    "rustBinaryCount": 2,
+    "incompatibleWithAgentMinOs": ["rust_common.dll", "rust_utils.dll"]
   },
   "severityCounts": {
     "Critical": 0,
-    "High": 0,
-    "Medium": 0,
-    "Low": 4,
-    "Info": 3
+    "High": 1,
+    "Medium": 1,
+    "Low": 3,
+    "Info": 2
   }
 }
