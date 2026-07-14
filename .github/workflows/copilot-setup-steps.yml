@@ -1,0 +1,44 @@
+name: "Copilot Setup Steps"
+
+# Provisions the ephemeral environment that GitHub's Copilot coding agent uses
+# when it works the "Release risk analysis for <tag>" task. It preinstalls the
+# tools the `release-risk-analysis` skill relies on (Node for the filesystem MCP
+# server, Rust for the `rustc`/OS supportability check) so the agent does not have
+# to discover them by trial and error.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # The job MUST be named `copilot-setup-steps` for Copilot to pick it up.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Node runs the off-the-shelf filesystem MCP server (`.mcp.json`) via npx.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Provides `rustc -vV` (release, host triple, LLVM) for the agent's Rust
+      # compiler / OS supportability check.
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # `unzip`/`jq` are used by the agent to unpack release packages and to
+      # build/validate the JSON report and dashboard.
+      - name: Install analysis utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip jq

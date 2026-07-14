@@ -28,18 +28,27 @@ throwaway helpers before you finish so nothing extra is committed.
 
 ## Inputs you are given
 
-The workflow unpacks the packages and passes context via environment variables:
+This skill is run by GitHub's **Copilot coding agent**, which is assigned a
+tracking issue titled `Release risk analysis for <tag>`. The issue body carries
+all the context you need:
 
-- `EVIDENCE_CURRENT_DIR` — unpacked current release (always present).
-- `EVIDENCE_PREVIOUS_DIR` — unpacked previous release, or empty when there is no
-  baseline.
-- `EVIDENCE_TAG`, `EVIDENCE_PREVIOUS_TAG`, `EVIDENCE_RELEASE_NAME`,
-  `EVIDENCE_PRERELEASE`, `EVIDENCE_PUBLISHED_AT`.
-- `EVIDENCE_BODY_FILE` — path to the release body / change list.
-- `EVIDENCE_MODEL` — model identifier to record in the output `model` field.
-- `EVIDENCE_OUTPUT_JSON` / `EVIDENCE_OUTPUT_MD` — where to write the per-release
-  report. `EVIDENCE_DASHBOARD` — the aggregate dashboard to regenerate.
-- `schema/analysis.schema.json` — the JSON Schema your JSON output must satisfy.
+- The **release tag** to analyze, its **name**, whether it is a **pre-release**,
+  its **published-at** timestamp, and a link to the **release page**.
+- The **previous (baseline) release tag**, or a note that no baseline exists.
+- The **model** to run on (`claude-opus-4.8`) — record it in the output `model`
+  field.
+
+You must download the release packages yourself: fetch the current release's
+`.zip` assets (and the previous release's assets when a baseline exists) and
+unpack them into a working directory before analyzing. Then produce:
+
+- `analysis/<tag>.json` — the schema-valid report (validate against
+  `schema/analysis.schema.json`).
+- `analysis/<tag>.md` — the rendered Markdown report.
+- `docs/risk-dashboard.md` — the aggregate dashboard, regenerated from all
+  `analysis/*.json` files (this is what is published to GitHub Pages).
+
+Finally, open a pull request with these changes.
 
 ## Fixed project constraints (always in scope)
 
@@ -81,13 +90,13 @@ write on the spot. Record every technology you considered in
 6. **Release-to-release diff.** When a baseline exists, compute added / removed /
    changed binaries (size, version, hash) and, crucially, **certificate changes**
    (thumbprint / issuer / serial / algorithm / timestamp authority drift).
-7. **Change list.** Read `EVIDENCE_BODY_FILE` and correlate stated changes with
-   what you observe in the binaries.
+7. **Change list.** Read the release body / change list (from the release page)
+   and correlate stated changes with what you observe in the binaries.
 
 ## Workflow
 
-1. **Plan.** List the binaries under `EVIDENCE_CURRENT_DIR` (and the baseline if
-   present). Decide which technologies apply.
+1. **Plan.** List the binaries in the unpacked current release (and the baseline
+   if present). Decide which technologies apply.
 2. **Collect.** Write and run scripts to gather the evidence above. Prefer many
    small, targeted probes over broad assumptions. Keep a structured record of
    what you find (you may stage it in a scratch file under the OS temp dir, not
@@ -105,11 +114,11 @@ write on the spot. Record every technology you considered in
 
 ## Output contract
 
-Write these files (paths come from the environment variables above):
+Write these files:
 
-1. **`EVIDENCE_OUTPUT_JSON`** — a **single JSON object** conforming to
+1. **`analysis/<tag>.json`** — a **single JSON object** conforming to
    `schema/analysis.schema.json`. It must include `schemaVersion` (`"1.0"`),
-   `tag`, `prerelease`, `generatedAt` (ISO-8601), `model` (use `EVIDENCE_MODEL`),
+   `tag`, `prerelease`, `generatedAt` (ISO-8601), `model` (use `claude-opus-4.8`),
    `overallRisk`, a concise `summary`, and a `findings` array. Every finding needs
    `category`, `severity`, `finding`, `rationale` (grounded in evidence), and
    `recommendation`; add `evidenceRefs` (file paths, thumbprints, rustc versions)
@@ -118,10 +127,10 @@ Write these files (paths come from the environment variables above):
    `rustBinaryCount`, `incompatibleWithAgentMinOs`). **Validate the JSON against
    the schema** (write a quick throwaway validator and run it); fix any errors
    before finishing.
-2. **`EVIDENCE_OUTPUT_MD`** — a human-readable rendering of the same result:
+2. **`analysis/<tag>.md`** — a human-readable rendering of the same result:
    header with tag / risk / summary, a findings table (category, severity,
    finding, recommendation), and the Rust supportability summary.
-3. **`EVIDENCE_DASHBOARD`** — regenerate the aggregate dashboard from **all**
+3. **`docs/risk-dashboard.md`** — regenerate the aggregate dashboard from **all**
    `analysis/*.json` files: keep the title and severity legend, then a per-release
    table (tag, overall risk, severity counts, and the cert/.NET/Rust/OS flags)
    sorted newest-first, followed by short drill-down sections per release.

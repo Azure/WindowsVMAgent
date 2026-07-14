@@ -1,0 +1,66 @@
+name: Publish report to GitHub Pages
+
+# Publishes the release risk & compatibility report to the repository's GitHub
+# Page. The Copilot coding agent writes the dashboard under `docs/` and the
+# per-release reports under `analysis/`; when its pull request is merged into the
+# default branch, this workflow assembles those into a static site and deploys it
+# to GitHub Pages. It can also be run manually.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "docs/**"
+      - "analysis/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Allow only one concurrent deployment.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Assemble site from docs/ and analysis/
+        run: |
+          set -euo pipefail
+          mkdir -p _site/analysis
+          # The dashboard is the site landing page.
+          if [ -f docs/risk-dashboard.md ]; then
+            cp docs/risk-dashboard.md _site/index.md
+          fi
+          cp -r docs/. _site/ 2>/dev/null || true
+          # Include the per-release JSON + Markdown reports.
+          if [ -d analysis ]; then
+            cp -r analysis/. _site/analysis/ 2>/dev/null || true
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
