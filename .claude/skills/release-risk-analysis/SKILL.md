@@ -72,7 +72,10 @@ write on the spot. Record every technology you considered in
    for each Rust binary and cross-reference it against the OS matrix: **rustc
    >= 1.78** raises the Windows baseline to **Windows 10 / Server 2016** and
    therefore drops the agent's oldest supported OS — treat that as a **High**
-   OS-compatibility risk. If a Rust binary's rustc version cannot be recovered,
+   OS-compatibility risk. (Rationale: Rust made Windows 10 / Server 2016 the
+   minimum supported Windows version in the **1.78** release — see the Rust
+   1.78.0 announcement / platform-support policy; revisit this threshold if that
+   baseline changes.) If a Rust binary's rustc version cannot be recovered,
    flag it **Low** (needs verification). Cross-reference the runner's `rustc -vV`
    and OS info when available.
 6. **Release-to-release diff.** When a baseline exists, compute added / removed /

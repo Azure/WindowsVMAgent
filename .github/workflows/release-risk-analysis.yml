@@ -160,6 +160,23 @@ jobs:
           EVIDENCE_OUTPUT_JSON: analysis/${{ steps.meta.outputs.tag }}.json
           EVIDENCE_OUTPUT_MD: analysis/${{ steps.meta.outputs.tag }}.md
           EVIDENCE_DASHBOARD: docs/risk-dashboard.md
+          # Instructions for the agent. The heavy lifting (constraints, detection
+          # technologies, output contract) lives in the skill; this just points at it.
+          PROMPT: >-
+            Analyze this Windows VM Agent release using the `release-risk-analysis`
+            skill at .claude/skills/release-risk-analysis/SKILL.md. All inputs are
+            provided via the EVIDENCE_* environment variables. Follow the skill
+            exactly: enumerate the applicable detection technologies, then write and
+            run whatever scripts you need (PowerShell is preferred on this Windows
+            runner) to collect deterministic evidence from the unpacked packages,
+            diff against the previous release when one exists, and assess Rust
+            compiler / OS supportability. Then write the schema-valid JSON report to
+            $EVIDENCE_OUTPUT_JSON, the Markdown report to $EVIDENCE_OUTPUT_MD, and
+            regenerate the aggregate dashboard at $EVIDENCE_DASHBOARD from all
+            analysis/*.json files. Validate the JSON against
+            schema/analysis.schema.json and delete any throwaway helper scripts
+            before finishing. Only create or modify those output files — do not run
+            git commit or git push.
         run: |
           set -euo pipefail
           mkdir -p analysis
@@ -168,8 +185,8 @@ jobs:
             --model "$CLAUDE_MODEL" \
             --mcp-config .mcp.json \
             --permission-mode bypassPermissions \
-            --max-turns 80 \
-            "Analyze this Windows VM Agent release using the \`release-risk-analysis\` skill at .claude/skills/release-risk-analysis/SKILL.md. All inputs are provided via the EVIDENCE_* environment variables. Follow the skill exactly: enumerate the applicable detection technologies, then write and run whatever scripts you need (PowerShell is preferred on this Windows runner) to collect deterministic evidence from the unpacked packages, diff against the previous release when one exists, and assess Rust compiler / OS supportability. Then write the schema-valid JSON report to \$EVIDENCE_OUTPUT_JSON, the Markdown report to \$EVIDENCE_OUTPUT_MD, and regenerate the aggregate dashboard at \$EVIDENCE_DASHBOARD from all analysis/*.json files. Validate the JSON against schema/analysis.schema.json and delete any throwaway helper scripts before finishing. Only create or modify those output files — do not run git commit or git push."
+            --max-turns 40 \
+            "$PROMPT"
 
       # No API key configured: write a minimal placeholder report (no LLM, no
       # Python) so the dashboard step and release attachment still succeed.
