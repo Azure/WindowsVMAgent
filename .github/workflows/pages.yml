@@ -78,22 +78,25 @@ jobs:
           reports = sorted(glob.glob("analysis/*.md"))
           linkmap = {os.path.basename(r): slug(os.path.basename(r)[:-3]) + ".html" for r in reports}
 
-          def rewrite(text):
+          def rewrite(text, base_prefix):
+              # base_prefix is the path prefix from the current page to the
+              # analysis/ directory: "analysis/" for the root dashboard, "" for a
+              # page that already lives inside analysis/.
               for base, target in linkmap.items():
-                  text = text.replace("../analysis/" + base, "analysis/" + target)
-                  text = text.replace("analysis/" + base, "analysis/" + target)
+                  for src in ("../analysis/" + base, "analysis/" + base):
+                      text = text.replace(src, base_prefix + target)
               return text
 
           dash = "docs/risk-dashboard.md"
           if os.path.exists(dash):
               md.reset()
-              body = md.convert(rewrite(open(dash, encoding="utf-8").read()))
+              body = md.convert(rewrite(open(dash, encoding="utf-8").read(), "analysis/"))
               open("_site/index.html", "w", encoding="utf-8").write(page("Release Risk Dashboard", body))
 
           for r in reports:
               base = os.path.basename(r)
               md.reset()
-              body = md.convert(rewrite(open(r, encoding="utf-8").read()))
+              body = md.convert(rewrite(open(r, encoding="utf-8").read(), ""))
               open("_site/analysis/" + linkmap[base], "w", encoding="utf-8").write(page(base[:-3], body))
 
           # Publish the raw JSON reports alongside the HTML (slugified filenames).

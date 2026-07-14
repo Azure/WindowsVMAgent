@@ -13,8 +13,11 @@ name: Release Risk & Compatibility Analysis
 # GitHub Page.
 
 on:
+  # `published` fires for both full releases and pre-releases, so subscribing to
+  # it alone avoids duplicate delegations (which `released`/`prereleased` would
+  # cause). The prerelease flag is read from the release metadata below.
   release:
-    types: [published, released, prereleased]
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -58,7 +61,8 @@ jobs:
           # Fetch this release's metadata (works for both release + dispatch events).
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > release.json
           PRERELEASE=$(jq -r '.prerelease' release.json)
-          NAME=$(jq -r '.name // .tag_name' release.json)
+          # Strip any CR/LF so the release name is safe as a single-line output.
+          NAME=$(jq -r '.name // .tag_name' release.json | tr -d '\r\n')
           PUBLISHED=$(jq -r '.published_at // empty' release.json)
           HTMLURL=$(jq -r '.html_url // empty' release.json)
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
@@ -66,10 +70,15 @@ jobs:
           echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
           echo "html_url=$HTMLURL" >> "$GITHUB_OUTPUT"
 
-          # Deterministically pick the previous release (by published date) as baseline.
+          # Deterministically pick the baseline: the most recent OTHER release that
+          # was published strictly before this one (ISO-8601 timestamps compare
+          # lexicographically). This is correct for manual/back-fill runs on older
+          # tags too, not just the newest release.
           gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > releases.json
-          PREV_TAG=$(jq -r --arg tag "$TAG" '
-            [ .[] | select(.tag_name != $tag) ]
+          PREV_TAG=$(jq -r --arg tag "$TAG" --arg pub "$PUBLISHED" '
+            [ .[]
+              | select(.tag_name != $tag and .published_at != null
+                       and ($pub == "" or .published_at < $pub)) ]
             | sort_by(.published_at) | reverse | .[0].tag_name // empty' releases.json)
           echo "previous_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
           echo "Delegating analysis of $TAG (prerelease=$PRERELEASE), baseline=${PREV_TAG:-none}"
@@ -156,10 +165,26 @@ jobs:
           set -euo pipefail
           OWNER="${GITHUB_REPOSITORY%%/*}"
           REPO="${GITHUB_REPOSITORY##*/}"
+          TITLE="Release risk analysis for ${TAG}"
+
+          # 0) Idempotency: if a tracking issue for this tag already exists, do not
+          #    create a duplicate (a tag can be re-published, firing the trigger
+          #    again). Match the exact title in this repo.
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all \
+            --search "in:title \"${TITLE}\"" --json title,url \
+            --jq "[.[] | select(.title==\"${TITLE}\") | .url][0] // empty")
+          if [ -n "$EXISTING" ]; then
+            echo "Tracking issue for ${TAG} already exists: ${EXISTING} — skipping."
+            echo "## Release risk analysis already delegated for \`${TAG}\`: ${EXISTING}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           # 1) Resolve the repository node id and the Copilot agent's actor id.
           #    Copilot is exposed as an assignable "suggested actor" with the
-          #    CAN_BE_ASSIGNED capability and login `copilot-swe-agent`.
+          #    CAN_BE_ASSIGNED capability. Via GraphQL suggestedActors its login is
+          #    `copilot-swe-agent` (the REST assignees API surfaces the same bot as
+          #    `Copilot`); prefer `copilot-swe-agent`, else fall back to the bot
+          #    whose login is exactly `Copilot`.
           RESP=$(gh api graphql -f owner="$OWNER" -f name="$REPO" -f query='
             query($owner:String!, $name:String!) {
               repository(owner:$owner, name:$name) {
@@ -171,8 +196,9 @@ jobs:
             }')
           REPO_ID=$(echo "$RESP" | jq -r '.data.repository.id')
           COPILOT_ID=$(echo "$RESP" | jq -r '
-            .data.repository.suggestedActors.nodes[]
-            | select(.login=="copilot-swe-agent" or .login=="Copilot") | .id' | head -n1)
+            ( [ .data.repository.suggestedActors.nodes[] | select(.login=="copilot-swe-agent") ]
+              + [ .data.repository.suggestedActors.nodes[] | select(.login=="Copilot") ] )
+            | .[0].id // empty')
 
           if [ -z "$COPILOT_ID" ] || [ "$COPILOT_ID" = "null" ]; then
             echo "::error::Copilot coding agent is not available as an assignee for ${GITHUB_REPOSITORY}. Enable Copilot coding agent for this repository, or provide COPILOT_ASSIGN_TOKEN with access."
@@ -181,7 +207,6 @@ jobs:
 
           # 2) Create the tracking issue already assigned to Copilot. Assigning the
           #    Copilot actor at creation time hands the task to the coding agent.
-          TITLE="Release risk analysis for ${TAG}"
           CREATE=$(gh api graphql \
             -f repoId="$REPO_ID" \
             -f title="$TITLE" \
