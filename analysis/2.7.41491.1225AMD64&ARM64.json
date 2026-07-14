@@ -1,0 +1,142 @@
+{
+  "schemaVersion": "1.0",
+  "tag": "2.7.41491.1225AMD64&ARM64",
+  "releaseName": "Windows IaaS VMAgent 2.7.41491.1225 AMD64&ARM64 [Cancelled At Stage 9]",
+  "prerelease": false,
+  "publishedAt": "2026-05-18T20:11:39Z",
+  "generatedAt": "2026-07-14T20:41:23Z",
+  "model": "claude-opus-4.8",
+  "previousTag": "2.7.41491.1216AMD64&ARM64",
+  "overallRisk": "Low",
+  "summary": "Dry-run analysis of VMAgent 2.7.41491.1225 (baseline 2.7.41491.1216). This release exposes no downloadable .zip package assets on GitHub, so binary-level evidence (Authenticode signatures, PE/.NET target framework, OS-compatibility imports, embedded rustc versions) could not be collected; the assessment is therefore based on the published change list only. The change list is a routine feature/telemetry/build-infra update with no indication of a signing-certificate change, a move away from .NET Framework 4.0, or an OS-matrix change. It does touch Rust code paths (catalog-file install/uninstall), so the Rust compiler / OS supportability check must be re-run against the shipped Rust binaries once package assets are available. Overall risk is Low with several items pending binary verification.",
+  "findings": [
+    {
+      "category": "Change list",
+      "severity": "Low",
+      "finding": "Rust code paths changed (catalog-file install/uninstall)",
+      "rationale": "The change list includes PR 14499782 'Rust install and uninstall methods for catalog file feature' and PR 14786098 'catalog support', indicating the shipped Rust components changed in this release relative to 2.7.41491.1216.",
+      "recommendation": "Once the signed package is attached to the release, recover the embedded rustc version for each Rust binary and confirm it is < 1.78 so the Windows Server 2008 SP2 / Windows 7 SP2 baseline is preserved.",
+      "evidenceRefs": ["change-list: PR 14499782", "change-list: PR 14786098"]
+    },
+    {
+      "category": "Rust supportability",
+      "severity": "Low",
+      "finding": "rustc version could not be recovered (no package assets)",
+      "rationale": "The release carries no downloadable .zip assets, so no Rust binary was available to fingerprint for its embedded rustc version. The rustc >= 1.78 -> Windows 10 / Server 2016 supportability rule could not be evaluated against actual binaries in this dry run.",
+      "recommendation": "Attach the signed release package and re-run the analysis to confirm the Rust binaries were built with rustc < 1.78 (or accept the raised baseline if >= 1.78).",
+      "evidenceRefs": ["release assets: 0 .zip files"]
+    },
+    {
+      "category": "Signing/certificate change",
+      "severity": "Low",
+      "finding": "Authenticode signatures could not be verified (no package assets)",
+      "rationale": "With no .dll/.exe/.sys binaries available to download, Get-AuthenticodeSignature could not be run, so signer subject/issuer/thumbprint/serial and any certificate drift vs. the baseline could not be checked.",
+      "recommendation": "Verify every shipped binary is validly Microsoft-signed and that the signing certificate (thumbprint / issuer / serial / algorithm / timestamp authority) is unchanged vs. 2.7.41491.1216 once assets are present.",
+      "evidenceRefs": ["release assets: 0 .zip files"]
+    },
+    {
+      "category": ".NET Framework 4.0",
+      "severity": "Low",
+      "finding": "Target framework could not be verified (no package assets)",
+      "rationale": "No managed assemblies were available to read the TargetFrameworkAttribute / PE metadata, so drift away from .NET Framework 4.0 could not be confirmed or ruled out. Nothing in the change list indicates a target-framework change.",
+      "recommendation": "Confirm all managed assemblies still target .NET Framework 4.0 when package assets are available.",
+      "evidenceRefs": ["release assets: 0 .zip files"]
+    },
+    {
+      "category": "Binary/dependency changes",
+      "severity": "Info",
+      "finding": "Shared component version bumps",
+      "rationale": "The change list records VMAgent-Shared 3.0.03312.64 -> 3.0.3355.67 and HostGAP-SDK 1.0.8.181 -> 1.0.8.184 (ProxyAgent-Shared unchanged). These are routine dependency bumps described as perf/telemetry optimizations and build-image upgrades.",
+      "recommendation": "Diff the shared-component binaries (size / version / hash) against the baseline once package assets are available.",
+      "evidenceRefs": ["change-list: VMAgent-Shared 3.0.03312.64->3.0.3355.67", "change-list: HostGAP-SDK 1.0.8.181->1.0.8.184"]
+    },
+    {
+      "category": "OS compatibility",
+      "severity": "Info",
+      "finding": "Build image moved from 2019 to 2022 (build-time only)",
+      "rationale": "PR 15539952 'change build image from 2019 to 2022' and PR 15615349 'upgrade to 2022 image' change the build toolchain, not the runtime OS matrix. A newer toolchain can theoretically pull in newer imported APIs, but no runtime OS-matrix change is stated in the change list.",
+      "recommendation": "When binaries are available, inspect imported DLLs/APIs to ensure no symbols were introduced that are absent on Windows Server 2008 SP2 / Windows 7 SP2.",
+      "evidenceRefs": ["change-list: PR 15539952", "change-list: PR 15615349"]
+    },
+    {
+      "category": "Change list",
+      "severity": "Info",
+      "finding": "Feature/telemetry/validation changes with no compatibility signal",
+      "rationale": "The bulk of the change list is guest-agent pre-validation, signature-validation telemetry, static-check logic, goal-state performance improvements, binskim fixes and pipeline changes. None of these indicate a certificate change, a .NET target change, or an OS-matrix change.",
+      "recommendation": "No action beyond the standard binary verification once assets are attached.",
+      "evidenceRefs": ["change-list: VMAgent 2.7.41491.1216 -> 2.7.41491.1225"]
+    }
+  ],
+  "flags": {
+    "certChanged": false,
+    "netFrameworkDrift": false,
+    "rustChanged": true,
+    "osCompatibilityConcern": false,
+    "unsignedBinaries": false,
+    "rustSupportabilityConcern": false
+  },
+  "technologiesDetected": [
+    {
+      "name": "Authenticode signing (Get-AuthenticodeSignature)",
+      "purpose": "Verify every binary is validly Microsoft-signed and detect certificate drift vs. the baseline.",
+      "used": false,
+      "available": false,
+      "notes": "No .zip package assets on the release, so no binaries to inspect."
+    },
+    {
+      "name": "PE / .NET metadata",
+      "purpose": "Determine architecture, managed-vs-native, and the .NET target framework (drift from 4.0).",
+      "used": false,
+      "available": false,
+      "notes": "No assemblies available to read TargetFrameworkAttribute."
+    },
+    {
+      "name": "OS-compatibility imports",
+      "purpose": "Detect imported APIs unavailable on Windows Server 2008 SP2 / Windows 7 SP2.",
+      "used": false,
+      "available": false,
+      "notes": "No binaries available to inspect the import table."
+    },
+    {
+      "name": "Rust / native binary fingerprinting",
+      "purpose": "Identify Rust binaries and recover embedded rustc/cargo markers.",
+      "used": false,
+      "available": false,
+      "notes": "No binaries available; Rust change inferred from the change list only."
+    },
+    {
+      "name": "Rust compiler / OS supportability",
+      "purpose": "Cross-reference embedded rustc version against the OS matrix (rustc >= 1.78 -> Win10 / Server 2016).",
+      "used": false,
+      "available": false,
+      "notes": "rustc version could not be recovered without binaries."
+    },
+    {
+      "name": "Release-to-release diff",
+      "purpose": "Compute added/removed/changed binaries and certificate changes vs. the baseline.",
+      "used": false,
+      "available": false,
+      "notes": "Neither the current nor the baseline release exposes package assets."
+    },
+    {
+      "name": "Change-list correlation",
+      "purpose": "Correlate stated changes with observed binary changes.",
+      "used": true,
+      "available": true,
+      "notes": "Primary evidence source for this dry run."
+    }
+  ],
+  "rustSupport": {
+    "hasRustSupportabilityRisk": false,
+    "agentMinOs": "Windows Server 2008 SP2 / Windows 7 SP2",
+    "rustBinaryCount": 0,
+    "incompatibleWithAgentMinOs": []
+  },
+  "severityCounts": {
+    "Critical": 0,
+    "High": 0,
+    "Medium": 0,
+    "Low": 4,
+    "Info": 3
+  }
+}

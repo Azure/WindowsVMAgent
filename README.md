@@ -78,12 +78,21 @@ repository's **GitHub Page**.
 * **Copilot coding agent** must be enabled for the repository so the workflow can
   assign the analysis task to it. See
   [Copilot coding agent](https://docs.github.com/en/copilot/using-github-copilot/coding-agent).
+* **MCP servers** — the coding agent loads MCP from *Settings → Copilot → MCP
+  servers* (not from a file). The **GitHub MCP server** is enabled by default and
+  is what the agent uses to read release metadata and download package assets.
+  [`.mcp.json`](.mcp.json) is a committed reference config (an optional filesystem
+  server, also usable by the Claude Code CLI); mirror it into the repository MCP
+  settings if you want that server available to the agent.
 * **`COPILOT_ASSIGN_TOKEN`** *(optional)* — an Actions secret holding a token that
   can create issues and assign the Copilot agent. The built-in `GITHUB_TOKEN` is
   used by default; provide this secret only if your setup needs a PAT to assign
   Copilot.
 * **GitHub Pages** must be enabled with the *GitHub Actions* source so the
-  `pages.yml` workflow can publish the report.
+  `pages.yml` workflow can render and publish the report. The dashboard and each
+  report are rendered from Markdown to HTML (release tags containing URL-unsafe
+  characters such as `&` are slugified so links resolve correctly).
 * The model the agent runs as is pinned in the workflow via the `COPILOT_MODEL`
-  environment variable (`claude-opus-4.8`).
+  environment variable (`claude-opus-4.8`) and restated in
+  [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
 
